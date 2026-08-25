@@ -107,6 +107,33 @@ _TYPE_MAP: dict[type, JSONSchema] = {
     frozenset: {"type": "array", "items": {}, "uniqueItems": True},
     dict: {"type": "object"},
 }
+_NOT_JSON = object()
+
+
+def _json_default(value: Any) -> Any:
+    """Convert supported Python values for JSON encoding."""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, datetime | date | time):
+        return value.isoformat()
+    if isinstance(value, UUID | PurePath):
+        return str(value)
+    if isinstance(value, AbstractSet):
+        return list(value)
+    if is_dataclass(value) and not isinstance(value, type):
+        return {item.name: getattr(value, item.name) for item in fields(value)}
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _json_value(value: Any) -> Any:
+    """Return a JSON-compatible copy of value, or a private failure sentinel."""
+    try:
+        encoded = json.dumps(value, default=_json_default, allow_nan=False)
+        return json.loads(encoded)
+    except TypeError, ValueError:
+        return _NOT_JSON
 
 
 def _type_to_schema(annotation: Any, seen: frozenset[Any] | None = None) -> JSONSchema:
@@ -257,8 +284,10 @@ def _type_to_schema(annotation: Any, seen: frozenset[Any] | None = None) -> JSON
             schema = _type_to_schema(hints.get(item.name, item.type), next_seen)
             if item.default is MISSING and item.default_factory is MISSING:
                 required.append(item.name)
-            elif item.default is not MISSING and _is_json_value(item.default):
-                schema["default"] = item.default
+            elif item.default is not MISSING:
+                default = _json_value(item.default)
+                if default is not _NOT_JSON:
+                    schema["default"] = default
             properties[item.name] = schema
         return {
             "type": "object",
@@ -286,22 +315,6 @@ def _resolved_type_hints(target: Any) -> dict[str, Any]:
         return dict(getattr(target, "__annotations__", {}))
 
 
-def _is_json_value(value: Any) -> bool:
-    """Check whether a value can be encoded as JSON.
-
-    Args:
-        value: Value to inspect.
-
-    Returns:
-        True when json.dumps can encode the value; otherwise False.
-    """
-    try:
-        json.dumps(value)
-    except TypeError, ValueError:
-        return False
-    return True
-
-
 def _format_result(value: Any) -> str:
     """Convert a tool return value to text for the model.
 
@@ -316,7 +329,12 @@ def _format_result(value: Any) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     try:
-        return json.dumps(value, ensure_ascii=False)
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            default=_json_default,
+        )
     except TypeError, ValueError:
         return str(value)
 
@@ -422,6 +440,12 @@ class Tool:
     description: str
     parameters: JSONSchema
     func: ToolCallable
+    _signature: inspect.Signature | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _signature_func: ToolCallable | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         """Validate the configured tool metadata.
@@ -553,7 +577,10 @@ class Tool:
             A failed result when binding fails, or None when arguments are valid.
         """
         try:
-            inspect.signature(self.func).bind(**kwargs)
+            if self._signature is None or self._signature_func is not self.func:
+                self._signature = inspect.signature(self.func)
+                self._signature_func = self.func
+            self._signature.bind(**kwargs)
         except (TypeError, ValueError) as error:
             return ToolResult.error(
                 f"ERROR: invalid arguments for '{self.name}': {error}"
@@ -657,8 +684,10 @@ def tool(
 
             if parameter.default is inspect.Parameter.empty:
                 required.append(parameter_name)
-            elif _is_json_value(parameter.default):
-                schema["default"] = parameter.default
+            else:
+                default = _json_value(parameter.default)
+                if default is not _NOT_JSON:
+                    schema["default"] = default
 
             properties[parameter_name] = schema
 
@@ -668,7 +697,7 @@ def tool(
             if description is not None
             else doc_description or f"Call {tool_name}"
         )
-        return Tool(
+        wrapped = Tool(
             name=tool_name,
             description=tool_description,
             parameters={
@@ -679,6 +708,9 @@ def tool(
             },
             func=target,
         )
+        wrapped._signature = signature
+        wrapped._signature_func = target
+        return wrapped
 
     if func is not None:
         return decorator(func)
