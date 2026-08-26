@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
+
 from tools import Tool, ToolArguments, ToolRegistry
 
 
@@ -88,8 +89,15 @@ class Agent:
             )
             messages.append(response)
 
-            if not response.tool_calls and response.content is None:
-                raise AgentLoopError("Model returned neither content nor tool calls")
+            if not response.tool_calls:
+                if response.content is None:
+                    raise AgentLoopError(
+                        "Model returned neither content nor tool calls"
+                    )
+                return AgentResult(
+                    content=response.content,
+                    messages=tuple(messages),
+                )
 
             for call in response.tool_calls:
                 result = await self.registry.arun(
@@ -105,5 +113,5 @@ class Agent:
                 )
 
         raise AgentLoopError(
-            f"Agent exceeded the maximum of {self.max_turns} model truns"
+            f"Agent exceeded the maximum of {self.max_turns} model turns"
         )

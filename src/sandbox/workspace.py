@@ -20,7 +20,7 @@ class Workspace:
 
         object.__setattr__(self, "root", resolve_root)
 
-    def resolve(self, path: str) -> Path | None:
+    def resolve(self, path: str) -> Path:
         requested = Path(path)
 
         if requested.anchor:
