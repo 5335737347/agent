@@ -9,8 +9,14 @@ wheels/
 # Virtual environments
 .venv
 
+# Tests
+test/*
+
 # Env
 .env
 
 # lsp
 .ruff_cache/
+
+# IDEs
+.vscode

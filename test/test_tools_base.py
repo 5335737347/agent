@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import inspect
 import json
 import unittest
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Annotated, NotRequired, TypedDict
+from unittest.mock import patch
 
 from tools import Tool, ToolRegister, ToolResult, tool
 
@@ -61,6 +65,7 @@ class ToolDecoratorTests(unittest.TestCase):
         )
         self.assertEqual(schema["properties"]["paths"]["items"], {"type": "string"})
         self.assertEqual(schema["properties"]["mode"]["enum"], ["read", "write"])
+        self.assertEqual(schema["properties"]["mode"]["default"], "read")
         self.assertEqual(
             schema["properties"]["limit"]["anyOf"],
             [{"type": "integer"}, {"type": "null"}],
@@ -122,6 +127,50 @@ class ToolExecutionTests(unittest.TestCase):
         )
         self.assertIs(wrapped.run(), expected)
 
+    def test_serializes_supported_structured_values(self) -> None:
+        @dataclass
+        class Payload:
+            mode: Mode
+            created_at: datetime
+            path: Path
+            tags: set[str]
+
+        @tool
+        def structured() -> Payload:
+            return Payload(
+                mode=Mode.WRITE,
+                created_at=datetime(2026, 8, 25, 12, 30),
+                path=Path("src/tools/base.py"),
+                tags={"tool"},
+            )
+
+        self.assertEqual(
+            json.loads(structured.run().content),
+            {
+                "mode": "write",
+                "created_at": "2026-08-25T12:30:00",
+                "path": "src/tools/base.py",
+                "tags": ["tool"],
+            },
+        )
+
+    def test_caches_signature_until_callable_changes(self) -> None:
+        wrapped = Tool(
+            name="identity",
+            description="Return a value",
+            parameters={"type": "object", "properties": {}},
+            func=lambda value: value,
+        )
+
+        with patch("tools.base.inspect.signature", wraps=inspect.signature) as signature:
+            self.assertEqual(wrapped.run(value=1).content, "1")
+            self.assertEqual(wrapped.run(value=2).content, "2")
+            self.assertEqual(signature.call_count, 1)
+
+            wrapped.func = lambda value: value * 2
+            self.assertEqual(wrapped.run(value=3).content, "6")
+            self.assertEqual(signature.call_count, 2)
+
 
 class ToolRegisterTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -175,7 +224,6 @@ class AsyncToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await register.arun("add", '{"a": 2, "b": 3}')).content, "5")
         self.assertEqual((await register.arun("upper", {"value": "ok"})).content, "OK")
         self.assertTrue(add.run(a=1, b=2).is_error)
-
 
 if __name__ == "__main__":
     unittest.main()

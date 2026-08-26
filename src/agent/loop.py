@@ -74,10 +74,27 @@ class Agent:
         if self.max_turns < 1:
             raise ValueError("max_turns must be at least 1")
 
-    async def arun(self, prompt: str) -> AgentResult:
-        messages: list[Message] = []
+    async def arun(
+        self,
+        prompt: str,
+        *,
+        history: Sequence[Message] = (),
+    ) -> AgentResult:
+        """Run one user turn and return the updated conversation.
 
-        if self.system_prompt is not None:
+        Args:
+            prompt: Current user input.
+            history: Messages produced by previous user turns.
+
+        Returns:
+            The final answer and complete updated conversation.
+
+        Raises:
+            AgentLoopError: If the model cannot produce a final answer.
+        """
+        messages = list(history)
+
+        if not messages and self.system_prompt is not None:
             messages.append(SystemMessage(self.system_prompt))
 
         messages.append(UserMessage(prompt))
