@@ -9,7 +9,11 @@ from agent.loop import Agent, AgentLoopError, Message
 from agent.model import OpenAICompatibleClient
 from sandbox import Workspace
 from tools import ToolRegistry
-from tools.file_tools import make_read_file_tool
+from tools.filesystem import (
+    make_list_files_tool,
+    make_read_file_tool,
+    make_search_text_tool,
+)
 
 
 async def run_conversation(agent: Agent) -> None:
@@ -61,8 +65,11 @@ async def arun() -> None:
         model=os.getenv("MODEL_NAME", "deepcoder:14b"),
     )
 
+    workspace = Workspace(Path.cwd())
     registry = ToolRegistry()
-    registry.register(make_read_file_tool(Workspace(Path.cwd())))
+    registry.register(make_list_files_tool(workspace))
+    registry.register(make_search_text_tool(workspace))
+    registry.register(make_read_file_tool(workspace))
 
     agent = Agent(
         model=model,
